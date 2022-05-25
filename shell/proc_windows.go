@@ -1,3 +1,4 @@
+//go:build windows
 // +build windows
 
 package shell
@@ -5,8 +6,9 @@ package shell
 import (
 	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 func prepCmd(cmd *exec.Cmd) {
@@ -17,5 +19,43 @@ func prepCmd(cmd *exec.Cmd) {
 }
 
 func (e *Executor) sendSignal(sig os.Signal) error {
-	return exec.Command("taskkill", "/f", "/t", "/pid", strconv.Itoa(e.cmd.Process.Pid)).Run()
+	dll, err := windows.LoadDLL("kernel32.dll")
+	if err != nil {
+		return err
+	}
+	defer dll.Release()
+
+	pid := e.cmd.Process.Pid
+
+	f, err := dll.FindProc("AttachConsole")
+	if err != nil {
+		return err
+	}
+	r1, _, err := f.Call(uintptr(pid))
+	if r1 == 0 && err != syscall.ERROR_ACCESS_DENIED {
+		return err
+	}
+
+	f, err = dll.FindProc("SetConsoleCtrlHandler")
+	if err != nil {
+		return err
+	}
+	r1, _, err = f.Call(0, 1)
+	if r1 == 0 {
+		return err
+	}
+	f, err = dll.FindProc("GenerateConsoleCtrlEvent")
+	if err != nil {
+		return err
+	}
+	r1, _, err = f.Call(windows.CTRL_BREAK_EVENT, uintptr(pid))
+	if r1 == 0 {
+		return err
+	}
+	r1, _, err = f.Call(windows.CTRL_C_EVENT, uintptr(pid))
+	if r1 == 0 {
+		return err
+	}
+	return nil
+	//return exec.Command("taskkill", "/f", "/t", "/pid", strconv.Itoa(e.cmd.Process.Pid)).Run()
 }
